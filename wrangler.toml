@@ -1,34 +1,12 @@
-name = "zonanatural"
+name = "rumbo-aventura"
 compatibility_date = "2025-09-01"
-compatibility_flags = ["nodejs_compat"]          # <<<<<< clave
-pages_build_output_dir = ".vercel/output/static"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = ".vercel/output"
 
 # --- PREVIEW ---
 [env.preview]
-compatibility_flags = ["nodejs_compat"]          # redundante pero seguro
-
-  [env.preview.vars]
-  PUBLIC_R2_BASE_URL = "https://pub-ffefaa8c3c934bee9f27fc3e90740645.r2.dev"
-
-  [[env.preview.r2_buckets]]
-  binding = "R2"
-  bucket_name = "zona-natural-uploads"
-
-  [[env.preview.r2_buckets]]
-  binding = "R2_BUCKET"
-  bucket_name = "zona-natural-uploads"
+compatibility_flags = ["nodejs_compat"]
 
 # --- PRODUCCIÓN ---
 [env.production]
-compatibility_flags = ["nodejs_compat"]          # redundante pero seguro
-
-  [env.production.vars]
-  PUBLIC_R2_BASE_URL = "https://pub-ffefaa8c3c934bee9f27fc3e90740645.r2.dev"
-
-  [[env.production.r2_buckets]]
-  binding = "R2"
-  bucket_name = "zona-natural-uploads"
-
-  [[env.production.r2_buckets]]
-  binding = "R2_BUCKET"
-  bucket_name = "zona-natural-uploads"
+compatibility_flags = ["nodejs_compat"]
