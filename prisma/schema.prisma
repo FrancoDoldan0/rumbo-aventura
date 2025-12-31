@@ -3,13 +3,15 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  // En runtime (Edge) usás Accelerate con prisma://
-  url       = env("DATABASE_URL")
-  // Para comandos de CLI (db pull/migrate) usá la directa postgresql://
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
+/**
+ * =========================
+ * ADMIN
+ * =========================
+ */
 model AdminUser {
   id           Int       @id @default(autoincrement())
   email        String    @unique
@@ -19,172 +21,199 @@ model AdminUser {
   updatedAt    DateTime  @updatedAt
 }
 
+/**
+ * =========================
+ * CATEGORÍAS
+ * =========================
+ */
 model Category {
-  id        Int           @id @default(autoincrement())
-  name      String
-  slug      String        @unique
-
-  // === NUEVO: imagen de la categoría ===
-  // Legacy URL (si ya tenías una ruta directa; opcional para no romper datos existentes)
-  imageUrl  String?
-  // Clave del objeto en R2 (p.ej. "categories/uuid.jpg"), recomendada a futuro
-  imageKey  String?
-
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
-  subcats   Subcategory[]
-  products  Product[]
-  offers    Offer[]       @relation("CategoryOffers")
-  // Relación inversa opcional para banners (no cambia la DB)
-  banners   Banner[]
-}
-
-model Subcategory {
-  id         Int       @id @default(autoincrement())
-  name       String
-  slug       String    @unique
-  categoryId Int
-  category   Category  @relation(fields: [categoryId], references: [id])
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  products   Product[]
-}
-
-model Product {
-  id            Int            @id @default(autoincrement())
-  name          String
-  slug          String         @unique
-  description   String?
-  price         Float?
-  sku           String?
-  status        ProductStatus  @default(ACTIVE)
-  categoryId    Int?
-  category      Category?      @relation(fields: [categoryId], references: [id])
-  subcategoryId Int?
-  subcategory   Subcategory?   @relation(fields: [subcategoryId], references: [id])
-  images        ProductImage[]
-  productTags   ProductTag[]
-  offers        Offer[]        @relation("ProductOffers")
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-
-  // 🆕 Variantes de peso
-  hasVariants  Boolean         @default(false)
-  variants     ProductVariant[]
-
-  @@index([status])
-}
-
-model ProductImage {
-  id         Int      @id @default(autoincrement())
-  productId  Int
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  // Legacy (si ya existía en tu DB)
-  url        String?     // ← opcional para poder copiar a `key`
-
-  // Clave del objeto en R2 (p.ej. "products/1/1757875-xxxx.jpg")
-  key        String?     // ← primero opcional; luego la volvemos obligatoria
-
-  alt        String?
-  isCover    Boolean  @default(false)
-  sortOrder  Int      @default(0) @map("order")
-
-  // Metadatos opcionales
-  size       Int?
-  width      Int?
-  height     Int?
-
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@index([productId, sortOrder])
-  // Cuando `key` sea obligatoria, si querés:
-  // @@unique([key])
-}
-
-model Tag {
-  id   Int    @id @default(autoincrement())
-  name String @unique
-
-  productTags ProductTag[]
-  offers      Offer[]      @relation("TagOffers")
-}
-
-model ProductTag {
-  productId Int
-  tagId     Int
-
-  product Product @relation(fields: [productId], references: [id])
-  tag     Tag     @relation(fields: [tagId], references: [id])
-
-  @@unique([productId, tagId])
-}
-
-enum DiscountType {
-  PERCENT
-  AMOUNT
-}
-
-model Banner {
-  id         Int              @id @default(autoincrement())
-  title      String
-
-  // Legacy URL (previa a almacenar en R2). Se mantiene por compatibilidad.
-  imageUrl   String
-
-  // Clave de objeto en R2 (p.ej. "banners/uuid.jpg") para publicR2Url(imageKey)
-  imageKey   String?
-
-  // Campos renombrados lógicos mapeando columnas existentes
-  linkUrl    String?          @map("link")
-  isActive   Boolean          @default(true) @map("active")
-
-  // Ubicación destinada del banner
-  placement  BannerPlacement  @default(HOME)
-
-  // Si placement === CATEGORY, se puede asociar a una categoría
-  categoryId Int?
-  category   Category?        @relation(fields: [categoryId], references: [id])
-
-  // Ventana de vigencia (si se setean, se filtra por now ∈ [startAt, endAt])
-  startAt    DateTime?
-  endAt      DateTime?
-
-  sortOrder  Int              @default(0) @map("order")
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-
-  @@index([placement, isActive, categoryId, startAt, endAt])
-  @@index([sortOrder])
-}
-
-model Offer {
-  id           Int          @id @default(autoincrement())
-  title        String
-  description  String?
-  discountType DiscountType
-  discountVal  Float
-  startAt      DateTime?
-  endAt        DateTime?
-  productId    Int?
-  categoryId   Int?
-  tagId        Int?
-
-  product  Product?  @relation("ProductOffers", fields: [productId], references: [id])
-  category Category? @relation("CategoryOffers", fields: [categoryId], references: [id])
-  tag      Tag?      @relation("TagOffers", fields: [tagId], references: [id])
+  id       Int     @id @default(autoincrement())
+  name     String
+  slug     String  @unique
+  imageKey String? 
+  imageUrl String? 
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([productId])
-  @@index([categoryId])
-  @@index([tagId])
-  @@index([startAt])
-  @@index([endAt])
+  // Relaciones
+  subcategories Subcategory[]
+  banners       Banner[]
+  offers        Offer[]
+  products      Product[]     // ✅ Añadido para cerrar relación con Product
 }
 
+/**
+ * =========================
+ * SUBCATEGORÍAS
+ * =========================
+ */
+model Subcategory {
+  id   Int    @id @default(autoincrement())
+  name String
+  slug String
+
+  categoryId Int
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([slug, categoryId])
+  @@index([categoryId])
+}
+
+/**
+ * =========================
+ * PRODUCTOS
+ * =========================
+ */
+model Product {
+  id          Int     @id @default(autoincrement())
+  name        String
+  slug        String  @unique
+  description String?
+
+  price      Float
+  offerPrice Float?
+
+  sku   String?
+  stock Int?
+
+  status ProductStatus @default(ACTIVE)
+
+  // Variantes
+  hasVariants Boolean          @default(false)
+  variants    ProductVariant[]
+
+  // Categoría y Subcategoría
+  categoryId    Int?
+  category      Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId Int?
+  subcategory   Subcategory? @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+
+  // Etiquetas e Imágenes
+  productTags ProductTag[]
+  images      ProductImage[]
+  offers      Offer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([categoryId])
+  @@index([subcategoryId])
+}
+
+/**
+ * =========================
+ * RELACIÓN PRODUCTO-ETIQUETA
+ * =========================
+ */
+model ProductTag {
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tagId     Int
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([productId, tagId])
+}
+
+/**
+ * =========================
+ * IMÁGENES DE PRODUCTO
+ * =========================
+ */
+model ProductImage {
+  id        Int     @id @default(autoincrement())
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  key     String
+  alt     String?
+  isCover Boolean @default(false)
+
+  sortOrder Int @default(0) // Usado por uploads/route.ts
+  order     Int @default(0) // Usado por products/route.ts
+
+  size      Int?
+  createdAt DateTime @default(now())
+
+  @@index([productId, sortOrder])
+  @@index([productId, order])
+}
+
+/**
+ * =========================
+ * OFERTAS
+ * =========================
+ */
+model Offer {
+  id          Int     @id @default(autoincrement())
+  title       String
+  description String?
+
+  discountType String? // "PERCENTAGE" | "FIXED"
+  discountVal  Float?
+  startAt      DateTime?
+  endAt        DateTime?
+
+  isActive Boolean @default(true)
+
+  // Relaciones opcionales
+  categoryId Int?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  productId Int?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  tagId Int?          // ✅ Añadido para cerrar relación con Tag
+  tag   Tag? @relation(fields: [tagId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([categoryId])
+  @@index([productId])
+}
+
+/**
+ * =========================
+ * BANNERS
+ * =========================
+ */
+model Banner {
+  id Int @id @default(autoincrement())
+
+  title    String
+  imageUrl String
+  imageKey String
+
+  linkUrl   String?
+  placement BannerPlacement @default(HOME)
+
+  categoryId Int?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  isActive Boolean @default(true)
+
+  startAt DateTime?
+  endAt   DateTime?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * =========================
+ * AUDITORÍA Y ETIQUETAS
+ * =========================
+ */
 model AuditLog {
   id        Int      @id @default(autoincrement())
   action    String
@@ -192,16 +221,28 @@ model AuditLog {
   entityId  String?
   userId    String?
   ip        String?
-  userAgent String?
-  details   String?
+  userAgent String?  // ✅ Campo añadido
+  details   String?  // ✅ Campo añadido (usamos String para guardar el JSON stringificado)
   createdAt DateTime @default(now())
 }
 
+model Tag {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  productTags ProductTag[]
+  offers      Offer[]      // Relación inversa con Offer
+  createdAt   DateTime     @default(now())
+}
+
+/**
+ * =========================
+ * ENUMS Y VARIANTES
+ * =========================
+ */
 enum ProductStatus {
   ACTIVE
   INACTIVE
   DRAFT
-  ARCHIVED
   AGOTADO
 }
 
@@ -212,22 +253,21 @@ enum BannerPlacement {
   CHECKOUT
 }
 
-//
-// 🆕 Variantes de producto (hasta 3 por producto)
-//
 model ProductVariant {
-  id             Int      @id @default(autoincrement())
-  productId      Int
-  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id            Int     @id @default(autoincrement())
+  productId     Int
+  product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  label          String            // “1 Kg”, “500 gr”, etc.
-  price          Float?            // mismo tipo que Product.price
-  priceOriginal  Float?
-  sku            String?
-  stock          Int?
-  sortOrder      Int      @default(0)
-  active         Boolean  @default(true)
+  label         String
+  price         Float?
+  priceOriginal Float?
+  sku           String?
+  stock         Int?
+  sortOrder     Int     @default(0)
+  active        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([productId])
-  @@index([productId, sortOrder])
 }

@@ -32,11 +32,9 @@ export async function GET(_req: Request, ctx: any) {
   try {
     const prefix = `categories/${categoryId}/`;
 
-    // 1) R2 es la fuente de verdad
-    const r2Objs = await r2List(prefix); // [{ key, size, uploaded, etag }]
+    const r2Objs = await r2List(prefix);
     const r2Map = new Map(r2Objs.map((o) => [o.key, o] as const));
 
-    // 2) Metadata desde DB (si tuvieras CategoryImage)
     let rows: any[] = [];
     try {
       rows =
@@ -59,7 +57,6 @@ export async function GET(_req: Request, ctx: any) {
       rows = [];
     }
 
-    // 3) Fusionar por key
     const items = r2Objs.map((o, i) => {
       const row = rows.find((r) => r.key === o.key);
       return {
@@ -76,7 +73,6 @@ export async function GET(_req: Request, ctx: any) {
       };
     });
 
-    // 4) Incluir filas de DB sin objeto en R2 (opcional)
     for (const r of rows) {
       if (r?.key && !r2Map.has(r.key)) {
         items.push({
@@ -94,7 +90,6 @@ export async function GET(_req: Request, ctx: any) {
       }
     }
 
-    // 5) Orden final
     items.sort((a: any, b: any) => {
       const soA = Number.isFinite(a.sortOrder) ? a.sortOrder : 999999;
       const soB = Number.isFinite(b.sortOrder) ? b.sortOrder : 999999;
@@ -116,7 +111,7 @@ export async function GET(_req: Request, ctx: any) {
 }
 
 /* ============================================================
-   POST: subir a R2 + (best-effort) DB y ACTUALIZAR Category
+   POST: subir a R2 + (best-effort) DB
    ============================================================ */
 export async function POST(req: Request, ctx: any) {
   const { categoryId } = await readParams(ctx);
@@ -142,7 +137,6 @@ export async function POST(req: Request, ctx: any) {
   }
 
   try {
-    // sortOrder sugerido
     let sortOrder = Number(form.get('sortOrder'));
     if (!Number.isFinite(sortOrder)) {
       try {
@@ -151,33 +145,24 @@ export async function POST(req: Request, ctx: any) {
         sortOrder = 0;
       }
     }
+
     const isFirst = sortOrder === 0;
 
-    // Subida a R2
     const safeName = sanitizeName((file as any).name || 'upload');
     const key = `categories/${categoryId}/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}-${safeName}`;
-    const contentType = (file as any).type || undefined;
 
-    try {
-      await r2Put(key, file, contentType);
-    } catch (e: any) {
-      return NextResponse.json(
-        { ok: false, error: 'r2_put_failed', detail: e?.message ?? String(e) },
-        { status: 500 },
-      );
-    }
+    await r2Put(key, file, (file as any).type || undefined);
 
-    // Crear en DB (si existe CategoryImage; si no, seguimos R2-only)
     let created: any = {
-      id: undefined,
       key,
       alt,
       sortOrder,
       isCover: isFirst,
       createdAt: new Date().toISOString(),
     };
+
     try {
       created = await (prisma as any)?.categoryImage?.create({
         data: {
@@ -188,25 +173,18 @@ export async function POST(req: Request, ctx: any) {
           isCover: isFirst ? true : undefined,
           size: typeof (file as any).size === 'number' ? (file as any).size : undefined,
         },
-        select: { id: true, key: true, alt: true, sortOrder: true, isCover: true, createdAt: true },
       });
-    } catch {
-      // sin tabla, ok
-    }
+    } catch {}
 
-    // 👇 **Clave del fix**: actualizar la categoría con la URL pública y la key
+    // ✅ FIX: solo actualizar imageKey (imageUrl NO existe en el schema)
     try {
-      await prisma.category.update({
+      await (prisma as any).category?.update({
         where: { id: categoryId },
         data: {
           imageKey: key,
-          imageUrl: publicR2Url(key),
         },
-        select: { id: true },
       });
-    } catch {
-      // si falla, igual devolvemos ok (la imagen ya está en R2)
-    }
+    } catch {}
 
     await audit(req, 'category_images.create', 'category', String(categoryId), {
       imageId: created?.id,
@@ -226,7 +204,7 @@ export async function POST(req: Request, ctx: any) {
 }
 
 /* ============================================================
-   DELETE: body JSON { imageId?, key? } o query ?imageId / ?key
+   DELETE
    ============================================================ */
 export async function DELETE(req: Request, ctx: any) {
   const { categoryId } = await readParams(ctx);
@@ -235,56 +213,33 @@ export async function DELETE(req: Request, ctx: any) {
   }
 
   const url = new URL(req.url);
-  const qsImageId = url.searchParams.get('imageId');
-  const qsKey = url.searchParams.get('key');
-
-  const body = (await req.json().catch(() => ({}))) as { imageId?: number; key?: string };
-  const imageId =
-    typeof body.imageId === 'number' ? body.imageId : qsImageId ? Number(qsImageId) : undefined;
-  const key = typeof body.key === 'string' ? body.key : typeof qsKey === 'string' ? qsKey : undefined;
+  const imageId = Number(url.searchParams.get('imageId')) || undefined;
+  const key = url.searchParams.get('key') || undefined;
 
   if (!imageId && !key) {
     return NextResponse.json({ ok: false, error: 'missing imageId or key' }, { status: 400 });
   }
 
   try {
-    let keyToDelete: string | null = null;
+    let keyToDelete = key;
 
-    // Si llega imageId, buscamos key y borramos registro
     if (imageId) {
       try {
         const img = await (prisma as any)?.categoryImage?.findFirst({
           where: { id: imageId, categoryId },
-          select: { key: true },
         });
-        if (img?.key) keyToDelete = img.key;
-
+        keyToDelete = img?.key;
         await (prisma as any)?.categoryImage?.deleteMany({ where: { id: imageId, categoryId } });
       } catch {}
     }
 
-    // Si vino key directo
-    if (!keyToDelete && key) {
-      const expectedPrefix = `categories/${categoryId}/`;
-      if (!key.startsWith(expectedPrefix)) {
-        return NextResponse.json({ ok: false, error: 'invalid key' }, { status: 400 });
-      }
-      try {
-        await (prisma as any)?.categoryImage?.deleteMany({ where: { key, categoryId } });
-      } catch {}
-      keyToDelete = key;
-    }
-
-    // Borrar objeto en R2
     if (keyToDelete) {
-      try {
-        await r2Delete(keyToDelete);
-      } catch {}
+      await r2Delete(keyToDelete).catch(() => {});
     }
 
     await audit(req, 'category_images.delete', 'category', String(categoryId), {
       imageId,
-      key: keyToDelete ?? key,
+      key: keyToDelete,
     }).catch(() => {});
 
     return NextResponse.json({ ok: true });

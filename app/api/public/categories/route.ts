@@ -15,7 +15,8 @@ export async function GET() {
       slug: true,
       imageUrl: true,
       imageKey: true,
-      subcats: {
+      // ✅ Cambiado de subcats a subcategories (nombre real en el esquema)
+      subcategories: {
         orderBy: { name: 'asc' },
         select: { id: true, name: true, slug: true },
       },
@@ -28,7 +29,8 @@ export async function GET() {
     slug: c.slug,
     imageUrl: c.imageUrl ?? null,
     imageKey: c.imageKey ?? null,
-    subcats: (c.subcats || []).map((s) => ({ id: s.id, name: s.name, slug: s.slug })),
+    // ✅ Mapeamos el resultado de la relación a la clave "subcats" que espera tu frontend
+    subcats: (c.subcategories || []).map((s) => ({ id: s.id, name: s.name, slug: s.slug })),
   }));
 
   return json({ ok: true, items });

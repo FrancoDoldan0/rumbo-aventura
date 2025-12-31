@@ -5,7 +5,8 @@ import { publicR2Url } from "@/lib/storage";
 
 const prisma = createPrisma();
 
-type ProductImageRow = { key: string | null; url: string | null };
+// ✅ Corregido: Eliminado 'url' ya que no existe en el schema de ProductImage
+type ProductImageRow = { key: string | null }; 
 type ProductTagRow = { tagId: number };
 type ProductVariantRow = {
   id: number;
@@ -55,45 +56,26 @@ export type LandingOffer = {
 };
 
 type GetAllOffersOptions = {
-  /** 
-   * Si true (DEFAULT): incluye productos con variantes en descuento manual.
-   * Si false: solo productos que tengan una Offer explícita en /admin/ofertas.
-   */
   includeVariantDiscounts?: boolean;
 };
 
 /**
- * Devuelve TODOS los productos en oferta para usar tanto en:
- *  - landing (si se quiere el pool completo)
- *  - /ofertas
- *
- * Incluye (por defecto):
- *  - Productos con Offer.productId activo
- *  - Productos con variantes donde priceOriginal > price
- *
- * Solo usa imágenes que ya están en la DB:
- *  - primero image.url (legacy)
- *  - si no, image.key con publicR2Url(key)
+ * Devuelve TODOS los productos en oferta.
+ * Solo usa imágenes basadas en la 'key' mediante publicR2Url(key).
  */
 export async function getAllOffersRaw(
   options?: GetAllOffersOptions
 ): Promise<LandingOffer[]> {
-  const includeVariantDiscounts =
-    options?.includeVariantDiscounts ?? true;
-
+  const includeVariantDiscounts = options?.includeVariantDiscounts ?? true;
   const now = new Date();
 
-  // 1) Productos con Offer.productId activo (ventana de fechas)
+  // 1) Productos con Offer activa
   const directOffers = await prisma.offer.findMany({
     where: {
       productId: { not: null },
       AND: [
-        {
-          OR: [{ startAt: null }, { startAt: { lte: now } }],
-        },
-        {
-          OR: [{ endAt: null }, { endAt: { gte: now } }],
-        },
+        { OR: [{ startAt: null }, { startAt: { lte: now } }] },
+        { OR: [{ endAt: null }, { endAt: { gte: now } }] },
       ],
     },
     select: { productId: true },
@@ -104,8 +86,7 @@ export async function getAllOffersRaw(
     if (o.productId != null) productIds.add(o.productId);
   }
 
-  // 2) Productos con variantes con descuento manual (priceOriginal > price)
-  //    SOLO si includeVariantDiscounts = true (para /ofertas y usos generales).
+  // 2) Descuentos manuales en variantes
   if (includeVariantDiscounts) {
     const variantDiscounts = await prisma.productVariant.findMany({
       where: {
@@ -123,24 +104,22 @@ export async function getAllOffersRaw(
     for (const v of variantDiscounts) {
       if (
         v.productId != null &&
-        typeof v.price === "number" &&
-        typeof v.priceOriginal === "number" &&
-        v.price < v.priceOriginal
+        v.price! < v.priceOriginal!
       ) {
         productIds.add(v.productId);
       }
     }
   }
 
-  // Si no hay candidatos, no hay ofertas
   if (!productIds.size) return [];
 
-  // 3) Leemos SOLO esos productos con relaciones mínimas
+  // 3) Query de productos
   const products = await prisma.product.findMany({
     where: { id: { in: Array.from(productIds) } },
     orderBy: { id: "desc" },
     include: {
-      images: { select: { key: true, url: true } },
+      // ✅ Corregido: 'url' eliminado del select
+      images: { select: { key: true } }, 
       productTags: { select: { tagId: true } },
       variants: {
         where: { active: true },
@@ -161,122 +140,62 @@ export async function getAllOffersRaw(
 
   const typedItems = products as ProductRow[];
 
-  // 4) Calculamos precios base similar a /catalogo
+  // 4) Cálculo de precios
   const bare = typedItems.map((p) => ({
     id: p.id,
-    price: (p.price ?? null) as number | null,
-    categoryId: (p.categoryId ?? null) as number | null,
+    price: p.price ?? null,
+    categoryId: p.categoryId ?? null,
     tags: (p.productTags ?? []).map((t) => t.tagId),
   }));
 
-  let priced: Map<
-    number,
-    {
-      priceOriginal: number | null;
-      priceFinal: number | null;
-      offer?: any;
-    }
-  > = new Map();
+  let priced: Map<number, { priceOriginal: number | null; priceFinal: number | null; offer?: any }> = new Map();
 
   try {
     priced = await computePricesBatch(bare);
   } catch (e) {
-    console.error(
-      "[landing/offers] computePricesBatch falló, fallback a precio base:",
-      e
-    );
     for (const b of bare) {
-      const v = typeof b.price === "number" ? b.price : null;
-      priced.set(b.id, {
-        priceOriginal: v,
-        priceFinal: v,
-        offer: null,
-      });
+      priced.set(b.id, { priceOriginal: b.price, priceFinal: b.price, offer: null });
     }
   }
 
-  // 5) Mapeamos al formato que espera la UI
+  // 5) Mapeo final
   const mapped = typedItems.map((p) => {
     const pr = priced.get(p.id);
-
-    const basePriceOriginal =
-      pr?.priceOriginal ??
-      (typeof p.price === "number" ? p.price : null);
+    const basePriceOriginal = pr?.priceOriginal ?? p.price ?? null;
     const basePriceFinal = pr?.priceFinal ?? basePriceOriginal;
 
-    const hasBase =
-      typeof basePriceOriginal === "number" &&
-      typeof basePriceFinal === "number" &&
-      basePriceOriginal > 0;
-    const offerRatio = hasBase
-      ? (basePriceFinal as number) / (basePriceOriginal as number)
+    const offerRatio = (basePriceOriginal && basePriceOriginal > 0) 
+      ? (basePriceFinal || 0) / basePriceOriginal 
       : 1;
 
     let priceOriginal: number | null = basePriceOriginal;
     let priceFinal: number | null = basePriceFinal;
 
-    const activeVariants = Array.isArray(p.variants)
-      ? p.variants
-      : [];
-
+    const activeVariants = p.variants || [];
     const variants = activeVariants.map((v) => {
-      const manualOrig =
-        typeof v.priceOriginal === "number"
-          ? v.priceOriginal
-          : typeof v.price === "number"
-          ? v.price
-          : null;
+      const vOrig = v.priceOriginal ?? v.price ?? null;
+      const vFinal = v.price != null ? v.price * offerRatio : null;
 
-      const manualFinal =
-        typeof v.price === "number" ? v.price : manualOrig;
-
-      const vOrig = manualOrig;
-      const vFinal =
-        manualFinal != null ? manualFinal * (offerRatio || 1) : null;
-
-      return {
-        ...v,
-        priceOriginal: vOrig,
-        priceFinal: vFinal,
-      };
+      return { ...v, priceOriginal: vOrig, priceFinal: vFinal };
     });
 
     if (variants.length) {
-      const finals = variants
-        .map((v) => v.priceFinal)
-        .filter((x): x is number => typeof x === "number");
-      const origs = variants
-        .map((v) => v.priceOriginal)
-        .filter((x): x is number => typeof x === "number");
-
+      const finals = variants.map((v) => v.priceFinal).filter((x): x is number => x !== null);
+      const origs = variants.map((v) => v.priceOriginal).filter((x): x is number => x !== null);
       if (finals.length) priceFinal = Math.min(...finals);
       if (origs.length) priceOriginal = Math.min(...origs);
     }
 
-    const hasDiscount =
-      priceOriginal != null &&
-      priceFinal != null &&
-      (priceFinal as number) < (priceOriginal as number);
+    const hasDiscount = priceOriginal != null && priceFinal != null && priceFinal < priceOriginal;
+    const discountPercent = (hasDiscount && priceOriginal) 
+      ? Math.round((1 - (priceFinal! / priceOriginal!)) * 100) 
+      : 0;
 
-    const discountPercent =
-      hasDiscount && priceOriginal && priceFinal
-        ? Math.round(
-            (1 - (priceFinal as number) / (priceOriginal as number)) *
-              100
-          )
-        : 0;
-
-    // Imagen de portada:
-    // 1) si hay image.url (legacy), usarla
-    // 2) si hay image.key, usar publicR2Url(key)
-    const firstImg = Array.isArray(p.images) ? p.images[0] : undefined;
+    // ✅ Corregido: Lógica de imagen simplificada para usar solo la 'key'
+    const firstImg = p.images?.[0];
     let cover: string | null = null;
-    if (firstImg) {
-      if (firstImg.url) {
-        cover = firstImg.url;
-      } else if (firstImg.key) {
-        cover = publicR2Url(firstImg.key);
-      }
+    if (firstImg?.key) {
+      cover = publicR2Url(firstImg.key);
     }
 
     return {
@@ -295,32 +214,11 @@ export async function getAllOffersRaw(
     } satisfies LandingOffer;
   });
 
-  // Solo devolvemos las que realmente tienen descuento
-  const discounted = mapped.filter((i) => i.hasDiscount);
-
-  return discounted;
+  return mapped.filter((i) => i.hasDiscount);
 }
 
-/**
- * Versión optimizada para la landing:
- * - Solo usa productos que tengan una Offer explícita en /admin/ofertas
- *   (es decir, Offer.productId no nulo y dentro de la ventana de fechas).
- * - No incluye los "pseudo-descuentos" por variantes manuales.
- * - Limita el resultado a `limit` ítems (por defecto 9).
- */
-export async function getLandingOffersExplicit(
-  limit: number = 9
-): Promise<LandingOffer[]> {
-  // Usamos la misma lógica de precios y mapeo que getAllOffersRaw,
-  // pero sin sumar productos por variantes en descuento.
-  const allExplicit = await getAllOffersRaw({
-    includeVariantDiscounts: false,
-  });
-
+export async function getLandingOffersExplicit(limit: number = 9): Promise<LandingOffer[]> {
+  const allExplicit = await getAllOffersRaw({ includeVariantDiscounts: false });
   if (!allExplicit.length) return [];
-
-  if (limit <= 0) return allExplicit;
-
-  // getAllOffersRaw ya viene ordenado por id desc, slice alcanza.
-  return allExplicit.slice(0, limit);
+  return limit <= 0 ? allExplicit : allExplicit.slice(0, limit);
 }
