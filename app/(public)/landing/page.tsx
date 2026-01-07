@@ -10,7 +10,7 @@ import BestSellersGrid from "@/components/landing/BestSellersGrid";
 import dynamic from "next/dynamic";
 import type { Branch } from "@/components/landing/MapHours";
 import Sustainability from "@/components/landing/Sustainability";
-import { prisma } from "@/lib/prisma"; // Asegúrate de que esta ruta a tu cliente prisma sea correcta
+import { prisma } from "@/lib/prisma-edge"; // Usando tu archivo de Edge optimizado
 import { getAllOffersRaw } from "@/lib/offers-landing";
 
 /* ───────── CARGA DIFERIDA ───────── */
@@ -39,7 +39,7 @@ function shuffleSeed<T>(arr: T[], seed: string) {
   return a;
 }
 
-/* ───────── DATA FETCHERS (DIRECTO A DB) ───────── */
+/* ───────── DATA FETCHERS ───────── */
 
 async function getBanners(): Promise<BannerItem[]> {
   try {
@@ -72,7 +72,7 @@ async function getCategories() {
 async function getCatalogForGrid() {
   try {
     const products = await prisma.product.findMany({
-      where: { status: 'active' },
+      where: { status: 'ACTIVE' }, // Corregido: Mayúsculas para cumplir con el Enum de Prisma
       take: 20,
       orderBy: { id: 'desc' },
       include: { images: true, offer: true }
@@ -87,6 +87,7 @@ async function getCatalogForGrid() {
       status: p.status,
     }));
   } catch (e) {
+    console.error("Error catálogo:", e);
     return [];
   }
 }
@@ -94,17 +95,14 @@ async function getCatalogForGrid() {
 export default async function LandingPage() {
   const seed = new Date().toISOString().slice(0, 10);
 
-  // Ejecutamos todo en paralelo directamente contra la DB
-  const [banners, cats, catalog, offersAllRaw] = await Promise.all([
+  const [banners, cats, catalog] = await Promise.all([
     getBanners(),
     getCategories(),
     getCatalogForGrid(),
-    getAllOffersRaw().catch(() => []),
   ]);
 
   const catsDaily = shuffleSeed(cats, `${seed}:cats`).slice(0, 8);
   
-  // Datos estáticos para contacto
   const hours: [string, string][] = [["Lun–Vie", "09:00–19:00"], ["Sáb", "09:00–13:00"], ["Dom", "Cerrado"]];
   const branches: Branch[] = [
     { name: "Las Piedras", address: "Av. Artigas 600", mapsUrl: "#", embedUrl: "#", hours },
